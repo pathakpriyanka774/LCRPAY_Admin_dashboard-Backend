@@ -15,3 +15,4 @@ from models.service_job_log import *
 from models.payment_gateway import *
 from models.push_tokens import *
 from models.setting import *
+from models.invoice_record import *

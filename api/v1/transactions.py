@@ -1883,7 +1883,11 @@ async def get_all_records(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, le=500),
     status: str = Query(None),
-    service_type: str = Query(None)
+    service_type: str = Query(None),
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    search: str = Query(None),
+    reference_id: str = Query(None)
 ):
     """
     Fetches ALL records from Service_Request with ALL statuses
@@ -1892,12 +1896,32 @@ async def get_all_records(
     Shows who paid to whom for each transaction
     """
     try:
-        print(f"📊 [API] /all-records called - Filters: status={status}, service_type={service_type}, page={page}, page_size={page_size}")
+        print(f"📊 [API] /all-records called - Filters: status={status}, service_type={service_type}, start_date={start_date}, end_date={end_date}, search={search}, reference_id={reference_id}, page={page}, page_size={page_size}")
         
         # Base query - Include ALL statuses with optimized loading
         query = db.query(Service_Request)
 
-        # Apply status filter (exact match for better filtering)
+        # Apply date filter (highest priority)
+        if start_date:
+            try:
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+                query = query.filter(Service_Request.created_at >= start_dt)
+                print(f"✅ Start date filter applied: {start_date}")
+            except ValueError:
+                print(f"⚠️ Invalid start_date format: {start_date}")
+
+        if end_date:
+            try:
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+                # Add one day to include the full end_date
+                from datetime import timedelta
+                end_dt_inclusive = end_dt + timedelta(days=1)
+                query = query.filter(Service_Request.created_at < end_dt_inclusive)
+                print(f"✅ End date filter applied: {end_date} (inclusive)")
+            except ValueError:
+                print(f"⚠️ Invalid end_date format: {end_date}")
+
+        # Apply status filter (second priority)
         if status and status.lower() not in ['all', 'none', '']:
             query = query.filter(Service_Request.status == status.lower())
             print(f"✅ Status filter applied: {status.lower()}")
@@ -1929,6 +1953,24 @@ async def get_all_records(
                 )
             print(f"✅ Service type filter applied: {service_type}")
 
+        # Apply search filter (reference_id, mobile_number, user details)
+        if search and search.strip():
+            search_term = f"%{search.strip()}%"
+            query = query.filter(
+                or_(
+                    Service_Request.reference_id.ilike(search_term),
+                    Service_Request.mobile_number.ilike(search_term),
+                    Service_Request.payment_txn_id.ilike(search_term),
+                    Service_Request.utr_no.ilike(search_term)
+                )
+            )
+            print(f"✅ Search filter applied: {search.strip()}")
+
+        # Apply reference_id filter (exact match)
+        if reference_id and reference_id.strip():
+            query = query.filter(Service_Request.reference_id == reference_id.strip())
+            print(f"✅ Reference ID filter applied: {reference_id.strip()}")
+
         # Get total count before pagination
         total_records = query.count()
         print(f"📊 Total records matching filters: {total_records}")
@@ -1946,7 +1988,64 @@ async def get_all_records(
             users = db.query(User.UserID, User.fullname, User.member_id, User.MobileNumber).filter(
                 User.UserID.in_(user_ids)
             ).all()
-            users_dict = {u.UserID: {"name": u.fullname or f"User {u.UserID}", "member_id": u.member_id, "mobile": u.MobileNumber} for u in users}
+            
+            print(f"🔍 DEBUG: Fetched {len(users)} users from database")
+            for u in users:
+                print(f"🔍 DEBUG: User {u.UserID} - Name: '{u.fullname}', Member: '{u.member_id}', Mobile: '{u.MobileNumber}'")
+            
+            # Fetch user addresses
+            from models.models import User_Aadhar_Address, Aadhar_User
+            aadhar_user_ids = [u.UserID for u in users]
+            user_addresses = {}
+            if aadhar_user_ids:
+                aadhar_users = db.query(Aadhar_User).filter(
+                    Aadhar_User.user_id.in_(aadhar_user_ids)
+                ).all()
+                address_ids = [au.address_id for au in aadhar_users if au.address_id]
+                
+                if address_ids:
+                    addresses = db.query(User_Aadhar_Address).filter(
+                        User_Aadhar_Address.id.in_(address_ids)
+                    ).all()
+                    user_addresses = {addr.id: addr for addr in addresses}
+            
+            users_dict = {u.UserID: {
+                "name": u.fullname or f"User {u.UserID}", 
+                "member_id": u.member_id, 
+                "mobile": u.MobileNumber,
+                "address": None
+            } for u in users}
+            
+            # Map addresses to users
+            for aadhar_user in aadhar_users:
+                if hasattr(aadhar_user, 'address_id') and aadhar_user.address_id in user_addresses:
+                    address = user_addresses[aadhar_user.address_id]
+                    if aadhar_user.user_id in users_dict:
+                        # Format complete address
+                        address_parts = []
+                        if address.house and address.house.strip() and address.house.strip() != '-':
+                            address_parts.append(address.house.strip())
+                        if address.street and address.street.strip() and address.street.strip() != '-':
+                            address_parts.append(address.street.strip())
+                        if address.locality and address.locality.strip() and address.locality.strip() != '-':
+                            address_parts.append(address.locality.strip())
+                        if address.landmark and address.landmark.strip() and address.landmark.strip() != '-':
+                            address_parts.append(address.landmark.strip())
+                        if address.vtc and address.vtc.strip() and address.vtc.strip() != '-':
+                            address_parts.append(address.vtc.strip())
+                        if address.subDistrict and address.subDistrict.strip() and address.subDistrict.strip() != '-':
+                            address_parts.append(address.subDistrict.strip())
+                        if address.district and address.district.strip() and address.district.strip() != '-':
+                            address_parts.append(address.district.strip())
+                        if address.state and address.state.strip() and address.state.strip() != '-':
+                            address_parts.append(address.state.strip())
+                        if address.pin and address.pin.strip() and address.pin.strip() != '-':
+                            address_parts.append(address.pin.strip())
+                        if address.country and address.country.strip() and address.country.strip() != '-':
+                            address_parts.append(address.country.strip())
+                        
+                        # Update existing user dict with address, preserve name
+                        users_dict[aadhar_user.user_id]["address"] = ", ".join(filter(None, address_parts))
 
         # Get prime activation details
         from models.models import PrimeActivations
@@ -2041,6 +2140,7 @@ async def get_all_records(
                 "user_name": user_info["name"],
                 "user_member_id": user_info["member_id"],
                 "user_mobile": user_info["mobile"],
+                "user_address": user_info.get("address"),  # Add user address
                 "service_type": sr.service_type or "N/A",
                 "operator_code": sr.operator_code,
                 "mobile_number": sr.mobile_number,

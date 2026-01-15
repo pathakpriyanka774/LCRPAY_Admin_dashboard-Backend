@@ -8,10 +8,12 @@ from core.database import engine
 from core.base import Base
 
 # Import all models to register them with Base
-import models
+# import models
+from core.base import Base
 
 # Import all routers
 from api.v1 import auth, users, transactions, kyc, dashboard, payment_gateway, auto_crud, websocket, referral, notifications
+from api.v1.invoice_record import router as invoice_router
 from api.v1.auto_crud import get_models_list
 
 # Create all database tables with proper error handling
@@ -75,6 +77,9 @@ app.include_router(payment_gateway.router,
 app.include_router(notifications.router,
                    prefix="/api/v1/notifications",
                    tags=["notifications"])
+app.include_router(invoice_router,
+                   prefix="/api/v1/invoices",
+                   tags=["invoices"])
 
 
 @app.get("/")
